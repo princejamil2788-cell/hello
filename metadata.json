@@ -1,0 +1,6 @@
+{
+  "name": "FX Signal 1M",
+  "description": "1-Minute Forex & Binary Economic Calendar Screenshot Signal Analyzer in Bengali using Gemini AI",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

@@ -1,0 +1,1153 @@
+import React, { useState, useEffect, useRef, useMemo } from "react";
+import {
+  Upload,
+  TrendingUp,
+  TrendingDown,
+  MinusCircle,
+  AlertTriangle,
+  RefreshCw,
+  Sparkles,
+  CheckCircle2,
+  Clock,
+  Timer,
+  Flame,
+  Activity,
+  Key,
+  Layers,
+  ChevronDown,
+  ChevronUp,
+  ShieldAlert,
+  ArrowRight,
+  Trash2,
+  Zap,
+  FileText,
+  Info,
+} from "lucide-react";
+
+/**
+ * Helper to format current BD time (Asia/Dhaka, UTC+6) and local browser time
+ */
+function formatBDTime(date = new Date()) {
+  try {
+    return new Intl.DateTimeFormat("en-GB", {
+      timeZone: "Asia/Dhaka",
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
+      hour12: false,
+    }).format(date);
+  } catch {
+    return date.toTimeString().slice(0, 8);
+  }
+}
+
+/**
+ * Given a news time like "19:30" or "07:30 PM" or "20:15", compute a clean 1M entry window
+ * e.g., +3s to +8s after release for a 1-minute candle/trade.
+ */
+function computeOneMinuteEntryGuide(newsTimeStr) {
+  if (!newsTimeStr || typeof newsTimeStr !== "string") {
+    return {
+      entryWindow: "নিউজ রিলিজের +০৩ সেকেন্ডে",
+      expiryNote: "১ মিনিট (1M) এক্সপায়ারি / ক্যান্ডেল ক্লোজ",
+    };
+  }
+
+  // Try matching HH:MM (24h) or HH:MM AM/PM
+  const match24 = newsTimeStr.trim().match(/^(\d{1,2}):(\d{2})(?::(\d{2}))?$/);
+  const match12 = newsTimeStr
+    .trim()
+    .match(/^(\d{1,2}):(\d{2})(?::(\d{2}))?\s*(AM|PM)$/i);
+
+  let hours = null;
+  let minutes = null;
+
+  if (match24) {
+    hours = parseInt(match24[1], 10);
+    minutes = parseInt(match24[2], 10);
+  } else if (match12) {
+    hours = parseInt(match12[1], 10);
+    minutes = parseInt(match12[2], 10);
+    const period = match12[4].toUpperCase();
+    if (period === "PM" && hours !== 12) hours += 12;
+    if (period === "AM" && hours === 12) hours = 0;
+  }
+
+  if (
+    hours === null ||
+    minutes === null ||
+    Number.isNaN(hours) ||
+    Number.isNaN(minutes) ||
+    hours > 23 ||
+    minutes > 59
+  ) {
+    return {
+      entryWindow: `${newsTimeStr} এর ঠিক ৩–৫ সেকেন্ড পর`,
+      expiryNote: "১ মিনিট (1M) ট্রেড ডিউরেশন",
+    };
+  }
+
+  const hh = String(hours).padStart(2, "0");
+  const mm = String(minutes).padStart(2, "0");
+  return {
+    entryWindow: `${hh}:${mm}:03 – ${hh}:${mm}:08`,
+    expiryNote: `১ মিনিট (1M) — পরবর্তী ক্যান্ডেল (${hh}:${String((minutes + 1) % 60).padStart(2, "0")}:00) পর্যন্ত`,
+  };
+}
+
+/**
+ * 5 realistic 1-minute signals derived from a single sample Economic Calendar screenshot
+ * so users can immediately test multi-signal extraction, Red vs Medium separation, and 1M timing.
+ */
+const DEMO_CALENDAR_PRESET = {
+  id: "calendar-session-5-signals",
+  label: "ডেমো ক্যালেন্ডার স্ক্রিনশট (৫টি ১-মিনিট সিগন্যাল)",
+  subtitle: "USD, EUR, GBP এবং JPY ইভেন্টের সমন্বয়ে তৈরি ৫টি আলাদা ১M সিগন্যাল",
+  calendarSummary:
+    "আজকের ইকোনমিক ক্যালেন্ডার সেশন: US Core Retail Sales (Red), EU ZEW Economic Sentiment (Medium), GBP Claimant Count Change (Red), JPY Trade Balance (Medium), এবং US Industrial Production (Medium)।",
+  extracted_text: `[Demo Calendar Screenshot Data]
+19:30 | USD | Core Retail Sales m/m | Actual: 0.5% | Forecast: 0.2% | Prev: 0.1% | Impact: High (Red)
+20:00 | EUR | German ZEW Economic Sentiment | Actual: 8.4 | Forecast: 14.0 | Prev: 13.1 | Impact: Medium
+20:30 | GBP | Claimant Count Change | Actual: 38.2K | Forecast: 15.0K | Prev: 18.4K | Impact: High (Red)
+21:00 | JPY | Adjusted Merchandise Trade Balance | Actual: -0.42T | Forecast: -0.25T | Prev: -0.31T | Impact: Medium
+21:30 | USD | Industrial Production m/m | Actual: -0.3% | Forecast: 0.1% | Prev: 0.2% | Impact: Medium`,
+  signals: [
+    {
+      id: "sig-1",
+      news_title: "US Core Retail Sales m/m (রিলিজ সম্পন্ন)",
+      currency: "USD",
+      suggested_pair: "EUR/USD",
+      event: "Core Retail Sales m/m",
+      news_time: "19:30",
+      entry_time: "19:30:04",
+      timeframe: "1 Minute (1M)",
+      actual: "0.5%",
+      forecast: "0.2%",
+      previous: "0.1%",
+      impact: "high",
+      currency_bias: "bullish",
+      signal: "SELL",
+      confidence: "high",
+      how_to_enter_bn:
+        "19:30 এ ডাটা প্রকাশের পর চার্টে প্রথম ৩-৪ সেকেন্ডের প্রাথমিক স্পাইক শেষ হতে দিন। 19:30:04 সেকেন্ডে EUR/USD চার্টে 1M SELL / PUT এন্ট্রি নিন এবং ঠিক ১ মিনিট (60s) হোল্ড করুন।",
+      reason_bn:
+        "Actual (0.5%) Forecast (0.2%) এবং Previous (0.1%) এর তুলনায় অনেক বেশি এসেছে। এতে USD শক্তিশালী হওয়ায় EUR/USD ১ মিনিটের জন্য নিচের দিকে চাপ পেতে পারে।",
+      risk_bn:
+        "হাই/রেড ইমপ্যাক্ট নিউজে প্রথম ২ সেকেন্ডে স্প্রেড বাড়তে পারে ও হঠাৎ উইক (wick) তৈরি হতে পারে। নিশ্চিত লাভের কোনো নিশ্চয়তা নেই; ছোট অ্যামাউন্টে ট্রেড করুন।",
+    },
+    {
+      id: "sig-2",
+      news_title: "German ZEW Economic Sentiment",
+      currency: "EUR",
+      suggested_pair: "EUR/USD",
+      event: "ZEW Economic Sentiment",
+      news_time: "20:00",
+      entry_time: "20:00:05",
+      timeframe: "1 Minute (1M)",
+      actual: "8.4",
+      forecast: "14.0",
+      previous: "13.1",
+      impact: "medium",
+      currency_bias: "bearish",
+      signal: "SELL",
+      confidence: "medium",
+      how_to_enter_bn:
+        "20:00 বাজে ইভেন্ট আসার পর ক্যান্ডেলের দিক নিশ্চিত করুন। 20:00:05 সেকেন্ডে EUR/USD-এ 1M SELL / PUT নিন; ক্যান্ডেল উপরের দিকে রিজেকশন দিলে এন্ট্রি আরও সতর্কতার সাথে যাচাই করুন।",
+      reason_bn:
+        "ZEW সেন্টিমেন্ট 8.4 এসেছে যা Forecast (14.0) এর চেয়ে বেশ কম। এতে EUR-এর ওপর স্বল্পমেয়াদী নেতিবাচক চাপ তৈরি হতে পারে।",
+      risk_bn:
+        "মিডিয়াম ইমপ্যাক্ট নিউজে মুভমেন্ট মাঝে মাঝে ধীর বা সাইডওয়েজ হতে পারে। ১ মিনিটের বেশি সময় ধরে রাখবেন না।",
+    },
+    {
+      id: "sig-3",
+      news_title: "UK Claimant Count Change",
+      currency: "GBP",
+      suggested_pair: "GBP/USD",
+      event: "Claimant Count Change",
+      news_time: "20:30",
+      entry_time: "20:30:03",
+      timeframe: "1 Minute (1M)",
+      actual: "38.2K",
+      forecast: "15.0K",
+      previous: "18.4K",
+      impact: "high",
+      currency_bias: "bearish",
+      signal: "SELL",
+      confidence: "high",
+      how_to_enter_bn:
+        "বেকারত্ব আবেদন সংখ্যা প্রত্যাশার চেয়ে বেশি আসায় 20:30:03 সেকেন্ডে GBP/USD চার্টে 1M SELL / PUT সিগন্যাল অনুসরণ করুন। ১ মিনিটের এক্সপায়ারি বা ১M ক্যান্ডেল ক্লোজে নজর রাখুন।",
+      reason_bn:
+        "Claimant Count 38.2K এসেছে যা Forecast (15.0K) এর দ্বিগুণেরও বেশি—এটি শ্রমবাজারের দুর্বলতা ও GBP-এর ওপর বিয়ারিশ চাপের ইঙ্গিত দেয়।",
+      risk_bn:
+        "রেড ইমপ্যাক্ট সময়ে দ্রুত রিভার্সাল বা স্লিপেজ হতে পারে। রিস্ক ম্যানেজমেন্ট ছাড়া ট্রেড করবেন না।",
+    },
+    {
+      id: "sig-4",
+      news_title: "Japan Adjusted Merchandise Trade Balance",
+      currency: "JPY",
+      suggested_pair: "USD/JPY",
+      event: "Trade Balance",
+      news_time: "21:00",
+      entry_time: "21:00:05",
+      timeframe: "1 Minute (1M)",
+      actual: "-0.42T",
+      forecast: "-0.25T",
+      previous: "-0.31T",
+      impact: "medium",
+      currency_bias: "bearish",
+      signal: "BUY",
+      confidence: "medium",
+      how_to_enter_bn:
+        "21:00 বাজে ট্রেড ব্যালেন্স ঘাটতি বাড়ার তথ্য এলে 21:00:05 সেকেন্ডে USD/JPY-এ 1M BUY / CALL ট্রেড নিন (কারণ JPY দুর্বল হলে USD/JPY উপরের দিকে যেতে পারে)।",
+      reason_bn:
+        "বাণিজ্য ঘাটতি (-0.42T) পূর্বাভাসের (-0.25T) চেয়ে বেশি হওয়ায় JPY দুর্বল হওয়ার সম্ভাবনা তৈরি হয়েছে, যা USD/JPY পেয়ারে ঊর্ধ্বমুখী বায়াস (BUY) সমর্থন করে।",
+      risk_bn:
+        "মিডিয়াম ইমপ্যাক্ট ডাটার প্রতিক্রিয়া সবসময় তীব্র হয় না; লিকুইডিটি ও স্প্রেড যাচাই করে নিন।",
+    },
+    {
+      id: "sig-5",
+      news_title: "US Industrial Production m/m",
+      currency: "USD",
+      suggested_pair: "USD/CHF",
+      event: "Industrial Production m/m",
+      news_time: "21:30",
+      entry_time: "21:30:04",
+      timeframe: "1 Minute (1M)",
+      actual: "-0.3%",
+      forecast: "0.1%",
+      previous: "0.2%",
+      impact: "medium",
+      currency_bias: "bearish",
+      signal: "SELL",
+      confidence: "medium",
+      how_to_enter_bn:
+        "21:30 বাজে ডাটা প্রকাশের পর 21:30:04 সেকেন্ডে USD/CHF-এ 1M SELL / PUT এন্ট্রি বিবেচনা করুন। যদি প্রথম ২ সেকেন্ডে বড় বিপরীত স্পাইক দেখেন তবে WAIT করুন।",
+      reason_bn:
+        "Industrial Production -0.3% এসেছে যা Forecast (0.1%) এর নিচে। এতে USD-এর ওপর সামান্য বিয়ারিশ বায়াস তৈরি হতে পারে।",
+      risk_bn:
+        "মিশ্র বা দুর্বল সংকেতে ক্ষতির ঝুঁকি থাকে; এটি শুধুমাত্র বিশ্লেষণ ও শিক্ষামূলক সহায়তা, নিশ্চিত লাভের গ্যারান্টি নয়।",
+    },
+  ],
+};
+
+/**
+ * Normalize & enrich parsed signals from Gemini JSON so every signal has consistent fields
+ * and sensible 1-minute timing even if the model omits entry_time.
+ */
+function normalizeSignalsArray(rawSignals, fallbackTitle = "ইকোনমিক নিউজ সিগন্যাল") {
+  if (!Array.isArray(rawSignals) || rawSignals.length === 0) return [];
+
+  // Filter out any WAIT signal candidates and normalize BUY/SELL
+  const filteredRaw = rawSignals.filter((item) => {
+    const sigRaw = String(item?.signal || "").toUpperCase();
+    return sigRaw.includes("BUY") || sigRaw.includes("SELL") || sigRaw.includes("CALL") || sigRaw.includes("PUT");
+  });
+
+  // If raw signals didn't yield enough non-WAIT signals, fall back to valid actionable items
+  const sourceList = filteredRaw.length > 0 ? filteredRaw : rawSignals;
+
+  return sourceList.slice(0, 5).map((item, index) => {
+    const impactRaw = String(item?.impact || "medium").toLowerCase();
+    const impact =
+      impactRaw.includes("high") || impactRaw.includes("red")
+        ? "high"
+        : impactRaw.includes("low")
+        ? "low"
+        : "medium";
+
+    const biasRaw = String(item?.currency_bias || "bullish").toLowerCase();
+    const currency_bias = biasRaw.includes("bear") ? "bearish" : "bullish";
+
+    const sigRaw = String(item?.signal || "").toUpperCase();
+    // Strictly map to BUY or SELL. NEVER allow WAIT.
+    const signal = sigRaw.includes("SELL") || sigRaw.includes("PUT") ? "SELL" : "BUY";
+
+    const confRaw = String(item?.confidence || "medium").toLowerCase();
+    const confidence = confRaw.includes("high")
+      ? "high"
+      : confRaw.includes("low")
+      ? "low"
+      : "medium";
+
+    const newsTime = item?.news_time ? String(item.news_time) : "রিলিজ সময়ে";
+    const computedTiming = computeOneMinuteEntryGuide(newsTime);
+
+    return {
+      id: item?.id || `gen-sig-${index + 1}`,
+      news_title: item?.news_title || `${fallbackTitle} #${index + 1}`,
+      currency: item?.currency || "USD",
+      suggested_pair: item?.suggested_pair || (signal === "BUY" ? "EUR/USD" : "GBP/USD"),
+      event: item?.event || "Economic Release",
+      news_time: newsTime,
+      entry_time: item?.entry_time ? String(item.entry_time) : computedTiming.entryWindow,
+      timeframe: item?.timeframe || "1 Minute (1M)",
+      actual: item?.actual ?? null,
+      forecast: item?.forecast ?? null,
+      previous: item?.previous ?? null,
+      impact,
+      currency_bias,
+      signal, // Guaranteed BUY or SELL
+      confidence,
+      how_to_enter_bn:
+        item?.how_to_enter_bn ||
+        `${newsTime} নিউজের ঠিক ৩–৫ সেকেন্ড পর ক্যান্ডেলের প্রাথমিক স্পাইক দেখে 1M (${signal}) এন্ট্রি নিন। ১ মিনিট (60s) পর্যন্ত হোল্ড করুন।`,
+      reason_bn:
+        item?.reason_bn ||
+        "নিউজ ডেটা ও ক্যান্ডেল বায়াসের ভিত্তি ধরে ১-মিনিট স্কেলিং সিগন্যাল নির্ধারণ করা হয়েছে।",
+      risk_bn:
+        item?.risk_bn ||
+        "১-মিনিট ট্রেডিংয়ে স্প্রেড পরিবর্তন ও রিভার্সাল হতে পারে। মনি ম্যানেজমেন্ট বজায় রাখুন।",
+    };
+  });
+}
+
+/**
+ * Call Gemini Vision API (`gemini-3-flash-preview`) with exponential backoff to extract
+ * 4 to 5 distinct 1-minute signals from a single uploaded screenshot.
+ */
+async function analyzeScreenshotWithGemini(base64Data, mimeType, customApiKey) {
+  const apiKey = customApiKey || "";
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash-preview:generateContent?key=${encodeURIComponent(
+    apiKey
+  )}`;
+
+  const systemInstruction = `
+তুমি একজন দক্ষ ১-মিনিট (1M) ফরেক্স নিউজ ও বাইনারি অপশন সিগন্যাল বিশ্লেষক।
+ব্যবহারকারী একটি ফরেক্স নিউজ বা ইকোনমিক ক্যালেন্ডারের স্ক্রিনশট দিয়েছে।
+
+কঠোর নিয়মাবলী:
+১. স্ক্রিনশট থেকে কমপক্ষে ৪টি এবং সর্বোচ্চ ৫টি (4 to 5) পরিষ্কার BUY অথবা SELL ১-মিনিট সিগন্যাল তৈরি করো।
+২. "signal" হিসেবে কখনোই "WAIT" বা "NEUTRAL" দেওয়া যাবে না। শুধুমাত্র "BUY" অথবা "SELL" দিতে হবে। নিউজ ডেটা কম থাকলেও মোমেন্টাম ও বায়াস বিশ্লেষণ করে স্পষ্ট BUY বা SELL সিদ্ধান্ত নির্ধারণ করো।
+৩. প্রতিটি সিগন্যালের impact অবশ্যই "high" (Red / High Impact) অথবা "medium" (Medium Impact) হিসেবে চিহ্নিত করো।
+৪. সময় সূচি:
+   - "news_time": ইভেন্ট প্রকাশের সময় (যেমন "19:30")
+   - "entry_time": ১-মিনিট এন্ট্রি নেওয়ার সুনির্দিষ্ট সময় (যেমন "19:30:03")
+   - "timeframe": "1 Minute (1M)"
+   - "how_to_enter_bn": ১-মিনিটে কখন ও কীভাবে BUY/SELL দিবেন তার ধাপে ধাপে নিয়ম বাংলায় স্পষ্ট করে দাও।
+৫. সব উত্তর বাংলায় লেখো। কখনোই গ্যারান্টিড লাভের কথা বলবে না।
+`;
+
+  const userPrompt =
+    "এই স্ক্রিনশটটি বিশ্লেষণ করে ৪-৫টি সুনির্দিষ্ট ১-মিনিট BUY বা SELL সিগন্যাল তৈরি করো। কোনো WAIT সিগন্যাল দিও না। Red এবং Medium Impact আলাদা করে দেখাও এবং নিখুঁত এন্ট্রি সময় দাও।";
+
+  const payload = {
+    contents: [
+      {
+        role: "user",
+        parts: [
+          { text: userPrompt },
+          {
+            inlineData: {
+              mimeType,
+              data: base64Data,
+            },
+          },
+        ],
+      },
+    ],
+    systemInstruction: {
+      parts: [{ text: systemInstruction }],
+    },
+    generationConfig: {
+      responseMimeType: "application/json",
+      responseSchema: {
+        type: "OBJECT",
+        properties: {
+          calendar_summary_bn: { type: "STRING" },
+          extracted_text: { type: "STRING" },
+          signals: {
+            type: "ARRAY",
+            items: {
+              type: "OBJECT",
+              properties: {
+                news_title: { type: "STRING" },
+                currency: { type: "STRING" },
+                suggested_pair: { type: "STRING" },
+                event: { type: "STRING" },
+                news_time: { type: "STRING" },
+                entry_time: { type: "STRING" },
+                timeframe: { type: "STRING" },
+                actual: { type: "STRING", nullable: true },
+                forecast: { type: "STRING", nullable: true },
+                previous: { type: "STRING", nullable: true },
+                impact: { type: "STRING" },
+                currency_bias: { type: "STRING" },
+                signal: { type: "STRING" },
+                confidence: { type: "STRING" },
+                how_to_enter_bn: { type: "STRING" },
+                reason_bn: { type: "STRING" },
+                risk_bn: { type: "STRING" },
+              },
+              required: [
+                "news_title",
+                "currency",
+                "suggested_pair",
+                "event",
+                "news_time",
+                "entry_time",
+                "timeframe",
+                "impact",
+                "currency_bias",
+                "signal",
+                "confidence",
+                "how_to_enter_bn",
+                "reason_bn",
+                "risk_bn",
+              ],
+            },
+          },
+        },
+        required: ["calendar_summary_bn", "extracted_text", "signals"],
+      },
+    },
+  };
+
+  const maxRetries = 3;
+  let lastError = null;
+
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    try {
+      const response = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+
+      if (!response.ok) {
+        const errBody = await response.text().catch(() => "");
+        throw new Error(`API অনুরোধ ব্যর্থ (${response.status}): ${errBody.slice(0, 120)}`);
+      }
+
+      const data = await response.json();
+      const rawJson = data?.candidates?.[0]?.content?.parts?.[0]?.text;
+      if (!rawJson) {
+        throw new Error("মডেল থেকে কোনো JSON উত্তর পাওয়া যায়নি।");
+      }
+
+      const parsed = JSON.parse(rawJson);
+      const normalizedSignals = normalizeSignalsArray(
+        parsed?.signals,
+        "স্ক্রিনশট নিউজ সিগন্যাল"
+      );
+
+      if (normalizedSignals.length === 0) {
+        throw new Error("স্ক্রিনশট থেকে সিগন্যাল তৈরি করা যায়নি।");
+      }
+
+      return {
+        calendarSummary:
+          parsed?.calendar_summary_bn ||
+          "আপলোড করা স্ক্রিনশট থেকে ৪-৫টি সুনির্দিষ্ট ১-মিনিট সিগন্যাল ফিল্টার করে দেখানো হচ্ছে।",
+        extractedText: parsed?.extracted_text || rawJson,
+        signals: normalizedSignals,
+      };
+    } catch (err) {
+      lastError = err;
+      if (attempt < maxRetries) {
+        const delayMs = 1000 * Math.pow(2, attempt);
+        await new Promise((resolve) => setTimeout(resolve, delayMs));
+      }
+    }
+  }
+
+  throw lastError || new Error("অজানা ত্রুটি ঘটেছে।");
+}
+
+export default function App() {
+  const [apiKey, setApiKey] = useState("");
+  const [file, setFile] = useState(null);
+  const [previewUrl, setPreviewUrl] = useState(null);
+  const [dragActive, setDragActive] = useState(false);
+
+  const [isAnalyzing, setIsAnalyzing] = useState(false);
+  const [errorMsg, setErrorMsg] = useState(null);
+
+  // Active set of 4-5 signals (either from preset or uploaded screenshot analysis)
+  const [activeBatchTitle, setActiveBatchTitle] = useState(
+    DEMO_CALENDAR_PRESET.label
+  );
+  const [calendarSummary, setCalendarSummary] = useState(
+    DEMO_CALENDAR_PRESET.calendarSummary
+  );
+  const [extractedText, setExtractedText] = useState(
+    DEMO_CALENDAR_PRESET.extracted_text
+  );
+  const [signals, setSignals] = useState(DEMO_CALENDAR_PRESET.signals);
+
+  // Impact filter: "ALL" | "HIGH" | "MEDIUM"
+  const [impactFilter, setImpactFilter] = useState("ALL");
+  const [showExtractedText, setShowExtractedText] = useState(false);
+  const [bdClock, setBdClock] = useState(() => formatBDTime(new Date()));
+
+  const fileInputRef = useRef(null);
+
+  useEffect(() => {
+    const timer = setInterval(() => {
+      setBdClock(formatBDTime(new Date()));
+    }, 1000);
+    return () => clearInterval(timer);
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      if (previewUrl) URL.revokeObjectURL(previewUrl);
+    };
+  }, [previewUrl]);
+
+  const handleSelectedFile = (selected) => {
+    if (!selected) return;
+    if (!selected.type.startsWith("image/")) {
+      setErrorMsg("শুধুমাত্র ছবি ফাইল (PNG, JPG, WEBP) আপলোড করুন।");
+      return;
+    }
+    if (previewUrl) URL.revokeObjectURL(previewUrl);
+    const objectUrl = URL.createObjectURL(selected);
+    setFile(selected);
+    setPreviewUrl(objectUrl);
+    setErrorMsg(null);
+  };
+
+  const handleDrop = (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setDragActive(false);
+    const droppedFile = e.dataTransfer?.files?.[0];
+    if (droppedFile) {
+      handleSelectedFile(droppedFile);
+    }
+  };
+
+  const handleLoadDemoPreset = () => {
+    setErrorMsg(null);
+    setActiveBatchTitle(DEMO_CALENDAR_PRESET.label);
+    setCalendarSummary(DEMO_CALENDAR_PRESET.calendarSummary);
+    setExtractedText(DEMO_CALENDAR_PRESET.extracted_text);
+    setSignals(DEMO_CALENDAR_PRESET.signals);
+    setImpactFilter("ALL");
+  };
+
+  const fileToBase64Pure = (targetFile) =>
+    new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => {
+        const resultStr = String(reader.result || "");
+        const commaIdx = resultStr.indexOf(",");
+        resolve(commaIdx >= 0 ? resultStr.slice(commaIdx + 1) : resultStr);
+      };
+      reader.onerror = () => reject(new Error("ছবি ফাইল পড়তে সমস্যা হয়েছে।"));
+      reader.readAsDataURL(targetFile);
+    });
+
+  const handleAnalyzeScreenshot = async (e) => {
+    if (e) e.preventDefault();
+    if (!file) {
+      setErrorMsg(
+        "প্রথমে একটি স্ক্রিনশট আপলোড করুন অথবা 'ডেমো ৫টি সিগন্যাল লোড করুন' বোতামে চাপ দিন।"
+      );
+      return;
+    }
+
+    setIsAnalyzing(true);
+    setErrorMsg(null);
+
+    try {
+      const base64Data = await fileToBase64Pure(file);
+      const outcome = await analyzeScreenshotWithGemini(
+        base64Data,
+        file.type,
+        apiKey.trim()
+      );
+
+      setActiveBatchTitle(`স্ক্রিনশট বিশ্লেষণ: ${file.name}`);
+      setCalendarSummary(outcome.calendarSummary);
+      setExtractedText(outcome.extractedText);
+      setSignals(outcome.signals);
+      setImpactFilter("ALL");
+    } catch (err) {
+      console.error("Analysis failed:", err);
+      setErrorMsg(
+        err?.message ||
+          "স্ক্রিনশট বিশ্লেষণে সমস্যা হয়েছে। API Key খালি থাকলে বা নেটওয়ার্ক সমস্যায় ডেমো ক্যালেন্ডার ব্যবহার করে সিগন্যাল দেখতে পারেন।"
+      );
+    } finally {
+      setIsAnalyzing(false);
+    }
+  };
+
+  const counts = useMemo(() => {
+    const high = signals.filter((s) => s.impact === "high").length;
+    const medium = signals.filter((s) => s.impact === "medium").length;
+    const other = signals.length - high - medium;
+    return { all: signals.length, high, medium, other };
+  }, [signals]);
+
+  const filteredSignals = useMemo(() => {
+    if (impactFilter === "HIGH") {
+      return signals.filter((s) => s.impact === "high");
+    }
+    if (impactFilter === "MEDIUM") {
+      return signals.filter((s) => s.impact === "medium");
+    }
+    return signals;
+  }, [signals, impactFilter]);
+
+  const getSignalBadge = (sig) => {
+    if (sig === "BUY") {
+      return {
+        label: "BUY / CALL",
+        classes:
+          "bg-emerald-500/15 text-emerald-300 border-emerald-500/40 shadow-sm shadow-emerald-950/60",
+        Icon: TrendingUp,
+      };
+    }
+    return {
+      label: "SELL / PUT",
+      classes:
+        "bg-rose-500/15 text-rose-300 border-rose-500/40 shadow-sm shadow-rose-950/60",
+      Icon: TrendingDown,
+    };
+  };
+
+  const getImpactBadge = (impact) => {
+    if (impact === "high") {
+      return {
+        label: "রেড ইমপ্যাক্ট (High)",
+        classes: "bg-red-500/20 text-red-200 border-red-500/50",
+        Icon: Flame,
+      };
+    }
+    if (impact === "medium") {
+      return {
+        label: "মিডিয়াম ইমপ্যাক্ট (Medium)",
+        classes: "bg-amber-500/20 text-amber-200 border-amber-500/50",
+        Icon: Activity,
+      };
+    }
+    return {
+      label: "লো ইমপ্যাক্ট (Low)",
+      classes: "bg-slate-700/50 text-slate-300 border-slate-600",
+      Icon: Info,
+    };
+  };
+
+  const getBiasLabel = (bias) => {
+    if (bias === "bullish") return { text: "Bullish (বুলিশ)", cls: "text-emerald-400" };
+    if (bias === "bearish") return { text: "Bearish (বিয়ারিশ)", cls: "text-rose-400" };
+    return { text: "Neutral (নিউট্রাল)", cls: "text-slate-300" };
+  };
+
+  return (
+    <div className="min-h-screen bg-slate-950 text-slate-100 selection:bg-emerald-500/30 selection:text-emerald-200">
+      {/* Subtle top glow */}
+      <div className="pointer-events-none fixed inset-x-0 top-0 h-72 bg-gradient-to-b from-emerald-500/10 via-sky-500/5 to-transparent" />
+
+      <div className="relative mx-auto max-w-6xl px-4 py-8 sm:px-6 lg:px-8">
+        {/* Header & Live BD Time */}
+        <header className="flex flex-col gap-4 border-b border-slate-800/90 pb-6 md:flex-row md:items-center md:justify-between">
+          <div>
+            <div className="inline-flex items-center gap-2 rounded-full border border-emerald-500/30 bg-emerald-500/10 px-3 py-1 text-xs font-medium text-emerald-300">
+              <Zap className="h-3.5 w-3.5" />
+              <span>১-মিনিট (1M) ফরেক্স ও বাইনারি নিউজ সিগন্যাল টার্মিনাল</span>
+            </div>
+            <h1 className="mt-3 text-2xl font-bold tracking-tight text-white sm:text-3xl">
+              Forex News Signal AI — ১-মিনিট সিগন্যাল বিশ্লেষক
+            </h1>
+            <p className="mt-1.5 max-w-2xl text-sm text-slate-400">
+              একটি ইকোনমিক ক্যালেন্ডার বা নিউজ স্ক্রিনশট থেকে ৪–৫টি ১-মিনিট সিগন্যাল তৈরি করুন। রেড ইমপ্যাক্ট ও মিডিয়াম ইমপ্যাক্ট সিগন্যাল আলাদা করে দেখুন এবং নিখুঁত এন্ট্রি সময় ও নিয়ম জানুন।
+            </p>
+          </div>
+
+          <div className="flex flex-col items-start gap-1 rounded-xl border border-slate-800 bg-slate-900/90 px-4 py-3 md:items-end">
+            <span className="text-[11px] font-medium uppercase tracking-wider text-slate-400">
+              বর্তমান সময় (BDT / UTC+6)
+            </span>
+            <div className="flex items-center gap-2 font-mono text-lg font-bold text-emerald-400">
+              <Clock className="h-4 w-4 text-emerald-400" />
+              <span>{bdClock}</span>
+            </div>
+            <span className="text-[11px] text-slate-500">
+              স্ক্রিনশটের সময় ও ব্রোকার টাইম সিঙ্ক করে নিন
+            </span>
+          </div>
+        </header>
+
+        {/* Upload & Control Panel */}
+        <section className="mt-7 grid grid-cols-1 gap-6 lg:grid-cols-12">
+          {/* Left: Screenshot Dropzone & Submit */}
+          <div className="rounded-2xl border border-slate-800 bg-slate-900/80 p-5 shadow-xl lg:col-span-7">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <h2 className="text-base font-semibold text-white flex items-center gap-2">
+                <Upload className="h-4 w-4 text-emerald-400" />
+                নিউজ বা ক্যালেন্ডার স্ক্রিনশট আপলোড করুন
+              </h2>
+              <button
+                type="button"
+                onClick={handleLoadDemoPreset}
+                className="inline-flex items-center gap-1.5 rounded-lg border border-sky-500/40 bg-sky-500/10 px-3 py-1.5 text-xs font-medium text-sky-300 transition hover:bg-sky-500/20"
+              >
+                <Layers className="h-3.5 w-3.5" />
+                <span>ডেমো ৫টি সিগন্যাল লোড করুন</span>
+              </button>
+            </div>
+
+            <form onSubmit={handleAnalyzeScreenshot} className="mt-4 space-y-4">
+              <div
+                onDragEnter={(e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  setDragActive(true);
+                }}
+                onDragOver={(e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  setDragActive(true);
+                }}
+                onDragLeave={(e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  setDragActive(false);
+                }}
+                onDrop={handleDrop}
+                onClick={() => fileInputRef.current?.click()}
+                role="button"
+                tabIndex={0}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" || e.key === " ") {
+                    e.preventDefault();
+                    fileInputRef.current?.click();
+                  }
+                }}
+                className={`group cursor-pointer rounded-xl border-2 border-dashed p-6 text-center transition ${
+                  dragActive
+                    ? "border-emerald-400 bg-emerald-500/10"
+                    : "border-slate-700/90 bg-slate-950/60 hover:border-slate-500 hover:bg-slate-950"
+                }`}
+              >
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  accept="image/*"
+                  onChange={(e) => handleSelectedFile(e.target.files?.[0])}
+                  className="hidden"
+                />
+
+                {previewUrl ? (
+                  <div className="space-y-3">
+                    <img
+                      src={previewUrl}
+                      alt="আপলোড করা ফরেক্স নিউজ স্ক্রিনশট"
+                      className="mx-auto max-h-56 rounded-lg border border-slate-800 object-contain"
+                    />
+                    <div className="flex flex-wrap items-center justify-center gap-3 text-xs text-slate-300">
+                      <span className="inline-flex items-center gap-1 text-emerald-400">
+                        <CheckCircle2 className="h-4 w-4" />
+                        {file?.name}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          if (previewUrl) URL.revokeObjectURL(previewUrl);
+                          setFile(null);
+                          setPreviewUrl(null);
+                        }}
+                        className="inline-flex items-center gap-1 rounded-md bg-rose-500/15 px-2.5 py-1 text-rose-300 hover:bg-rose-500/25"
+                      >
+                        <Trash2 className="h-3.5 w-3.5" />
+                        <span>ছবি সরান</span>
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="py-4">
+                    <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-full border border-slate-800 bg-slate-900 text-emerald-400 transition group-hover:scale-105">
+                      <Upload className="h-5 w-5" />
+                    </div>
+                    <p className="mt-3 text-sm font-medium text-slate-200">
+                      ক্যালেন্ডার বা নিউজ স্ক্রিনশট এখানে টেনে আনুন অথবা ক্লিক করুন
+                    </p>
+                    <p className="mt-1 text-xs text-slate-400">
+                      একটি স্ক্রিনশট থেকেই ৪–৫টি ১-মিনিট (1M) সিগন্যাল তৈরি হবে • PNG, JPG, WEBP
+                    </p>
+                  </div>
+                )}
+              </div>
+
+              {/* Optional API Key Input */}
+              <div className="rounded-xl border border-slate-800 bg-slate-950/70 p-3.5">
+                <label
+                  htmlFor="gemini-api-key"
+                  className="flex items-center justify-between text-xs font-medium text-slate-300"
+                >
+                  <span className="flex items-center gap-1.5">
+                    <Key className="h-3.5 w-3.5 text-amber-400" />
+                    Gemini API Key (ঐচ্ছিক — সরাসরি ভিশন বিশ্লেষণের জন্য)
+                  </span>
+                  <span className="text-[11px] text-slate-500">
+                    এনভায়রনমেন্টে কি থাকলে খালি রাখতে পারেন
+                  </span>
+                </label>
+                <input
+                  id="gemini-api-key"
+                  type="password"
+                  value={apiKey}
+                  onChange={(e) => setApiKey(e.target.value)}
+                  placeholder="AIzaSy... (অথবা ডেমো বাটন দিয়ে ৫টি সিগন্যাল দেখুন)"
+                  className="mt-2 w-full rounded-lg border border-slate-800 bg-slate-900 px-3 py-2 text-sm text-white placeholder-slate-500 focus:border-emerald-500 focus:outline-none"
+                />
+              </div>
+
+              {errorMsg && (
+                <div
+                  role="alert"
+                  className="flex items-start gap-2.5 rounded-xl border border-rose-500/40 bg-rose-500/10 p-3.5 text-xs text-rose-200"
+                >
+                  <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-rose-400" />
+                  <div>{errorMsg}</div>
+                </div>
+              )}
+
+              <button
+                type="submit"
+                disabled={isAnalyzing}
+                className="flex w-full items-center justify-center gap-2 rounded-xl bg-emerald-600 px-5 py-3 text-sm font-semibold text-white shadow-lg shadow-emerald-950/60 transition hover:bg-emerald-500 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {isAnalyzing ? (
+                  <>
+                    <RefreshCw className="h-4 w-4 animate-spin" />
+                    <span>স্ক্রিনশট থেকে ৪–৫টি ১-মিনিট সিগন্যাল তৈরি হচ্ছে...</span>
+                  </>
+                ) : (
+                  <>
+                    <Sparkles className="h-4 w-4" />
+                    <span>স্ক্রিনশট বিশ্লেষণ করে ৪–৫টি ১M সিগন্যাল নিন</span>
+                  </>
+                )}
+              </button>
+            </form>
+          </div>
+
+          {/* Right: 1-Minute Trading Rules & Time Guide */}
+          <div className="flex flex-col justify-between rounded-2xl border border-slate-800 bg-slate-900/80 p-5 shadow-xl lg:col-span-5">
+            <div className="space-y-4">
+              <h2 className="text-base font-semibold text-white flex items-center gap-2">
+                <Timer className="h-4 w-4 text-sky-400" />
+                ১-মিনিট (1M) নিউজ ট্রেডিং সময় ও নিয়ম গাইড
+              </h2>
+
+              <div className="space-y-3 text-xs leading-relaxed text-slate-300">
+                <div className="rounded-xl border border-slate-800 bg-slate-950/70 p-3.5">
+                  <p className="font-semibold text-emerald-300">
+                    ১. সময় কীভাবে বুঝবেন? (নিউজ টাইম বনাম এন্ট্রি টাইম)
+                  </p>
+                  <p className="mt-1 text-slate-400">
+                    প্রতিটি কার্ডে <strong className="text-slate-200">নিউজ সময়</strong> হলো ইভেন্ট প্রকাশের সময়, আর{" "}
+                    <strong className="text-emerald-300">১M এন্ট্রি সময়</strong> হলো নিউজ রিলিজের ঠিক ৩–৫ সেকেন্ড পর প্রথম প্রতিক্রিয়া/ক্যান্ডেল দেখে ট্রেড নেওয়ার সময়।
+                  </p>
+                </div>
+
+                <div className="rounded-xl border border-slate-800 bg-slate-950/70 p-3.5">
+                  <p className="font-semibold text-sky-300">
+                    ২. কীভাবে ১-মিনিটের ট্রেড নেবেন?
+                  </p>
+                  <p className="mt-1 text-slate-400">
+                    চার্ট বা অপশন টার্মিনালে <strong className="text-slate-200">1M (১ মিনিট)</strong> টাইমফ্রেম/এক্সপায়ারি সেট রাখুন। রিলিজের প্রথম ১–২ সেকেন্ডের অস্থির স্প্রেড বা হঠাৎ স্পাইক খেয়াল করে নির্ধারিত এন্ট্রি সময়ে{" "}
+                    <strong className="text-emerald-300">BUY/CALL</strong> বা{" "}
+                    <strong className="text-rose-300">SELL/PUT</strong> দিন।
+                  </p>
+                </div>
+
+                <div className="rounded-xl border border-slate-800 bg-slate-950/70 p-3.5">
+                  <p className="font-semibold text-amber-300">
+                    ৩. রেড ইমপ্যাক্ট বনাম মিডিয়াম ইমপ্যাক্ট
+                  </p>
+                  <p className="mt-1 text-slate-400">
+                    <span className="font-semibold text-red-300">রেড ইমপ্যাক্ট (High)</span> নিউজে গতি ও স্লিপেজ বেশি থাকে;{" "}
+                    <span className="font-semibold text-amber-300">মিডিয়াম ইমপ্যাক্ট (Medium)</span> নিউজে মুভমেন্ট তুলনামূলক সহনীয় হতে পারে, তবে ফলস মুভও সম্ভব।
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            <div className="mt-4 flex items-start gap-2.5 rounded-xl border border-amber-500/30 bg-amber-500/10 p-3 text-xs text-amber-200">
+              <ShieldAlert className="mt-0.5 h-4 w-4 shrink-0 text-amber-400" />
+              <p>
+                <strong>সতর্কতা:</strong> কোনো সিগন্যালই নিশ্চিত লাভের গ্যারান্টি নয়। ১-মিনিট ট্রেডিং অত্যন্ত ঝুঁকিপূর্ণ—নিজস্ব রিস্ক ম্যানেজমেন্ট মেনে চলুন।
+              </p>
+            </div>
+          </div>
+        </section>
+
+        {/* Active Batch Banner + Red vs Medium Filter Tabs */}
+        <section className="mt-9">
+          <div className="flex flex-col gap-4 rounded-2xl border border-slate-800 bg-slate-900/90 p-5 md:flex-row md:items-center md:justify-between">
+            <div>
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="rounded-md bg-slate-800 px-2.5 py-0.5 text-xs font-medium text-emerald-300">
+                  মোট {counts.all}টি ১-মিনিট সিগন্যাল
+                </span>
+                <span className="rounded-md bg-red-500/15 px-2.5 py-0.5 text-xs font-medium text-red-300">
+                  রেড: {counts.high}টি
+                </span>
+                <span className="rounded-md bg-amber-500/15 px-2.5 py-0.5 text-xs font-medium text-amber-300">
+                  মিডিয়াম: {counts.medium}টি
+                </span>
+              </div>
+              <h2 className="mt-2 text-lg font-bold text-white">{activeBatchTitle}</h2>
+              <p className="mt-1 text-xs leading-relaxed text-slate-400 sm:text-sm">
+                {calendarSummary}
+              </p>
+            </div>
+
+            {/* Filter Buttons: All / Red Impact / Medium Impact */}
+            <div
+              role="tablist"
+              aria-label="ইমপ্যাক্ট অনুযায়ী সিগন্যাল ফিল্টার"
+              className="flex flex-wrap items-center gap-2"
+            >
+              <button
+                type="button"
+                role="tab"
+                aria-selected={impactFilter === "ALL"}
+                onClick={() => setImpactFilter("ALL")}
+                className={`rounded-xl px-3.5 py-2 text-xs font-semibold transition ${
+                  impactFilter === "ALL"
+                    ? "bg-white text-slate-950 shadow"
+                    : "border border-slate-700 bg-slate-800/80 text-slate-300 hover:bg-slate-800"
+                }`}
+              >
+                সব সিগন্যাল ({counts.all})
+              </button>
+
+              <button
+                type="button"
+                role="tab"
+                aria-selected={impactFilter === "HIGH"}
+                onClick={() => setImpactFilter("HIGH")}
+                className={`inline-flex items-center gap-1.5 rounded-xl px-3.5 py-2 text-xs font-semibold transition ${
+                  impactFilter === "HIGH"
+                    ? "bg-red-600 text-white shadow shadow-red-950/60"
+                    : "border border-red-500/35 bg-red-500/10 text-red-200 hover:bg-red-500/20"
+                }`}
+              >
+                <Flame className="h-3.5 w-3.5" />
+                <span>রেড ইমপ্যাক্ট ({counts.high})</span>
+              </button>
+
+              <button
+                type="button"
+                role="tab"
+                aria-selected={impactFilter === "MEDIUM"}
+                onClick={() => setImpactFilter("MEDIUM")}
+                className={`inline-flex items-center gap-1.5 rounded-xl px-3.5 py-2 text-xs font-semibold transition ${
+                  impactFilter === "MEDIUM"
+                    ? "bg-amber-500 text-slate-950 shadow shadow-amber-950/60"
+                    : "border border-amber-500/35 bg-amber-500/10 text-amber-200 hover:bg-amber-500/20"
+                }`}
+              >
+                <Activity className="h-3.5 w-3.5" />
+                <span>মিডিয়াম ইমপ্যাক্ট ({counts.medium})</span>
+              </button>
+            </div>
+          </div>
+
+          {/* Signals Cards Grid */}
+          {filteredSignals.length === 0 ? (
+            <div className="mt-6 rounded-2xl border border-slate-800 bg-slate-900/60 p-8 text-center">
+              <p className="text-sm text-slate-300">
+                এই ইমপ্যাক্ট ক্যাটাগরিতে বর্তমানে কোনো সিগন্যাল নেই।
+              </p>
+              <button
+                type="button"
+                onClick={() => setImpactFilter("ALL")}
+                className="mt-3 rounded-lg bg-slate-800 px-4 py-2 text-xs font-medium text-white hover:bg-slate-700"
+              >
+                সব সিগন্যাল দেখুন
+              </button>
+            </div>
+          ) : (
+            <div className="mt-6 grid grid-cols-1 gap-5 md:grid-cols-2">
+              {filteredSignals.map((sig, idx) => {
+                const sigBadge = getSignalBadge(sig.signal);
+                const impBadge = getImpactBadge(sig.impact);
+                const biasInfo = getBiasLabel(sig.currency_bias);
+                const SignalIcon = sigBadge.Icon;
+                const ImpactIcon = impBadge.Icon;
+
+                return (
+                  <article
+                    key={sig.id}
+                    className={`flex flex-col justify-between rounded-2xl border p-5 transition ${
+                      sig.impact === "high"
+                        ? "border-red-500/30 bg-slate-900/90 hover:border-red-500/55"
+                        : sig.impact === "medium"
+                        ? "border-amber-500/25 bg-slate-900/90 hover:border-amber-500/50"
+                        : "border-slate-800 bg-slate-900/85 hover:border-slate-700"
+                    }`}
+                  >
+                    <div>
+                      {/* Top row: Signal index, Impact badge, Signal Action */}
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span className="rounded-md bg-slate-800 px-2 py-0.5 font-mono text-xs text-slate-300">
+                            #{idx + 1}
+                          </span>
+                          <span
+                            className={`inline-flex items-center gap-1 rounded-full border px-2.5 py-0.5 text-xs font-semibold ${impBadge.classes}`}
+                          >
+                            <ImpactIcon className="h-3.5 w-3.5" />
+                            <span>{impBadge.label}</span>
+                          </span>
+                          <span className="rounded-full border border-sky-500/30 bg-sky-500/10 px-2.5 py-0.5 text-xs font-medium text-sky-300">
+                            {sig.timeframe}
+                          </span>
+                        </div>
+
+                        <div
+                          className={`inline-flex items-center gap-1.5 rounded-xl border px-3 py-1 text-xs font-bold ${sigBadge.classes}`}
+                        >
+                          <SignalIcon className="h-4 w-4" />
+                          <span>{sigBadge.label}</span>
+                        </div>
+                      </div>
+
+                      {/* Title & Pair/Currency */}
+                      <div className="mt-3.5">
+                        <h3 className="text-base font-bold text-white">
+                          {sig.news_title}
+                        </h3>
+                        <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-slate-400">
+                          <span>
+                            কারেন্সি: <strong className="text-slate-200">{sig.currency}</strong>
+                          </span>
+                          <span>•</span>
+                          <span>
+                            পেয়ার:{" "}
+                            <strong className="text-emerald-300">{sig.suggested_pair}</strong>
+                          </span>
+                          <span>•</span>
+                          <span>
+                            বায়াস:{" "}
+                            <strong className={biasInfo.cls}>{biasInfo.text}</strong>
+                          </span>
+                        </div>
+                      </div>
+
+                      {/* Clear Time Box (News Time vs 1M Entry Time) */}
+                      <div className="mt-4 grid grid-cols-1 gap-2.5 rounded-xl border border-slate-800 bg-slate-950/80 p-3 sm:grid-cols-2">
+                        <div>
+                          <span className="block text-[11px] text-slate-400">
+                            ইভেন্ট / নিউজ সময়
+                          </span>
+                          <span className="mt-0.5 inline-flex items-center gap-1.5 font-mono text-sm font-semibold text-white">
+                            <Clock className="h-3.5 w-3.5 text-sky-400" />
+                            {sig.news_time}
+                          </span>
+                        </div>
+                        <div>
+                          <span className="block text-[11px] text-slate-400">
+                            ১-মিনিট এন্ট্রি সময় (কত সময়ে দেবেন)
+                          </span>
+                          <span className="mt-0.5 inline-flex items-center gap-1.5 font-mono text-sm font-bold text-emerald-300">
+                            <ArrowRight className="h-3.5 w-3.5 text-emerald-400" />
+                            {sig.entry_time}
+                          </span>
+                        </div>
+                      </div>
+
+                      {/* Actual / Forecast / Previous */}
+                      <div className="mt-3 grid grid-cols-3 gap-2 text-center">
+                        <div className="rounded-lg border border-slate-800/90 bg-slate-950/50 p-2">
+                          <span className="block text-[10px] uppercase tracking-wider text-slate-400">
+                            Actual
+                          </span>
+                          <span className="mt-0.5 block font-mono text-xs font-semibold text-white">
+                            {sig.actual || "N/A"}
+                          </span>
+                        </div>
+                        <div className="rounded-lg border border-slate-800/90 bg-slate-950/50 p-2">
+                          <span className="block text-[10px] uppercase tracking-wider text-slate-400">
+                            Forecast
+                          </span>
+                          <span className="mt-0.5 block font-mono text-xs font-semibold text-slate-200">
+                            {sig.forecast || "N/A"}
+                          </span>
+                        </div>
+                        <div className="rounded-lg border border-slate-800/90 bg-slate-950/50 p-2">
+                          <span className="block text-[10px] uppercase tracking-wider text-slate-400">
+                            Previous
+                          </span>
+                          <span className="mt-0.5 block font-mono text-xs font-semibold text-slate-300">
+                            {sig.previous || "N/A"}
+                          </span>
+                        </div>
+                      </div>
+
+                      {/* How to enter (1M step-by-step) */}
+                      <div className="mt-4 rounded-xl border border-emerald-500/20 bg-emerald-500/5 p-3">
+                        <p className="text-xs font-semibold text-emerald-300">
+                          কীভাবে ১-মিনিটের ট্রেড নেবেন:
+                        </p>
+                        <p className="mt-1 text-xs leading-relaxed text-slate-200">
+                          {sig.how_to_enter_bn}
+                        </p>
+                      </div>
+
+                      {/* Reason */}
+                      <div className="mt-3">
+                        <p className="text-xs font-semibold text-slate-300">
+                          বিশ্লেষণের কারণ:
+                        </p>
+                        <p className="mt-1 text-xs leading-relaxed text-slate-400">
+                          {sig.reason_bn}
+                        </p>
+                      </div>
+                    </div>
+
+                    {/* Risk Note */}
+                    <div className="mt-4 border-t border-slate-800/90 pt-3 text-[11px] leading-relaxed text-amber-200/90">
+                      <span className="font-semibold text-amber-300">ঝুঁকি সতর্কতা: </span>
+                      {sig.risk_bn}
+                    </div>
+                  </article>
+                );
+              })}
+            </div>
+          )}
+
+          {/* Expandable Extracted Text / Raw Data */}
+          <div className="mt-6 rounded-2xl border border-slate-800 bg-slate-900/70 p-4">
+            <button
+              type="button"
+              onClick={() => setShowExtractedText((prev) => !prev)}
+              className="flex w-full items-center justify-between text-left text-xs font-semibold text-slate-300 hover:text-white"
+            >
+              <span className="flex items-center gap-2">
+                <FileText className="h-4 w-4 text-slate-400" />
+                <span>স্ক্রিনশট / ক্যালেন্ডার থেকে প্রাপ্ত তথ্য দেখুন</span>
+              </span>
+              {showExtractedText ? (
+                <ChevronUp className="h-4 w-4 text-slate-400" />
+              ) : (
+                <ChevronDown className="h-4 w-4 text-slate-400" />
+              )}
+            </button>
+
+            {showExtractedText && (
+              <pre className="mt-3 overflow-x-auto whitespace-pre-wrap rounded-xl border border-slate-800 bg-slate-950 p-3.5 font-mono text-xs text-slate-300">
+                {extractedText}
+              </pre>
+            )}
+          </div>
+        </section>
+
+        {/* Bottom Disclaimer */}
+        <footer className="mt-10 rounded-2xl border border-slate-800/90 bg-slate-900/60 p-4 text-xs leading-relaxed text-slate-400">
+          <p>
+            <strong className="text-slate-200">অস্বীকৃতি (Disclaimer):</strong> এই ওয়েবসাইটটি শুধুমাত্র শিক্ষামূলক ও নিউজ বিশ্লেষণ সহায়তার জন্য তৈরি। ফরেক্স ও ১-মিনিট (1M) ট্রেডিংয়ে উচ্চ মাত্রার আর্থিক ঝুঁকি রয়েছে এবং কোনো সিগন্যালই নিশ্চিত বা গ্যারান্টিড লাভের প্রতিশ্রুতি দেয় না। নিজস্ব দায়িত্বে ও ঝুঁকি ব্যবস্থাপনা মেনে সিদ্ধান্ত নিন।
+          </p>
+        </footer>
+      </div>
+    </div>
+  );
+}

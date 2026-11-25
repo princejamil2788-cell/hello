@@ -1,0 +1,16 @@
+<resources>
+    <string name="app_name">FX Signal 1M</string>
+    <string name="tab_signals">সিগন্যাল</string>
+    <string name="tab_guide">১M গাইড</string>
+    <string name="cd_live_clock">বাংলাদেশ সময় ঘড়ি</string>
+    <string name="cd_upload_screenshot">স্ক্রিনশট আপলোড করুন</string>
+    <string name="cd_selected_screenshot">নির্বাচিত অর্থনৈতিক ক্যালেন্ডার স্ক্রিনশট</string>
+    <string name="cd_clear_screenshot">নির্বাচিত ছবি সরান</string>
+    <string name="cd_buy_signal">BUY অথবা CALL সিগন্যাল</string>
+    <string name="cd_sell_signal">SELL অথবা PUT সিগন্যাল</string>
+    <string name="cd_high_impact">রেড ইমপ্যাক্ট</string>
+    <string name="cd_medium_impact">মিডিয়াম ইমপ্যাক্ট</string>
+    <string name="cd_low_impact">লো ইমপ্যাক্ট</string>
+    <string name="cd_expand_raw">বিস্তারিত তথ্য দেখুন বা লুকান</string>
+    <string name="cd_risk_warning">ঝুঁকি সতর্কতা</string>
+</resources>
